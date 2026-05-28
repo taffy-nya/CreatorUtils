@@ -281,7 +281,7 @@ def dl_media(url, base_path, mode, start=None, end=None):
     """
     通过 yt-dlp 下载视频或音频
     base_path: 不含扩展名的输出路径
-    mode: 'v' 视频 (mp4), 'a' 音频 (m4a)
+    mode: 'v' 视频 (mp4), 'a' 音频 (m4a), 'va' 视频+音频
     """
     if yt_dlp is None:
         sys.exit("需要 yt-dlp: pip install yt-dlp")
@@ -290,6 +290,7 @@ def dl_media(url, base_path, mode, start=None, end=None):
         "outtmpl": base_path + ".%(ext)s",
         "force_keyframes_at_cuts": True,
         "noplaylist": True,
+        "http_headers": BILI_HEADERS,
     }
     if os.path.exists(COOKIES):
         opts["cookiefile"] = COOKIES
@@ -300,6 +301,14 @@ def dl_media(url, base_path, mode, start=None, end=None):
             {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"}
         ]
         ext_hint = "m4a"
+    elif mode == "va":
+        opts["format"] = "bestvideo+bestaudio/best"
+        opts["merge_output_format"] = "mp4"
+        opts["keepvideo"] = True
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "m4a"}
+        ]
+        ext_hint = "mp4 和 m4a"
     else:
         opts["format"] = "bestvideo+bestaudio/best"
         opts["merge_output_format"] = "mp4"
@@ -312,6 +321,25 @@ def dl_media(url, base_path, mode, start=None, end=None):
         if end is not None:
             rng["end_time"] = end
         opts["download_ranges"] = lambda info, ydl, r=rng: [r]
+
+    expected_files = []
+    if mode in ("v", "va"):
+        expected_files.append(base_path + ".mp4")
+    if mode in ("a", "va"):
+        expected_files.append(base_path + ".m4a")
+        
+    existing_files = [f for f in expected_files if os.path.exists(f)]
+    if existing_files:
+        names = " 和 ".join(os.path.basename(f) for f in existing_files)
+        try:
+            ans = input(f"  文件已存在: {names}，是否覆盖？[y/N]: ").strip().lower()
+        except KeyboardInterrupt:
+            print()
+            sys.exit(0)
+        if not ans or ans[0].lower() != "y":
+            print("  已跳过下载")
+            return 0
+        opts["overwrites"] = True
 
     print(f"  正在下载: {os.path.basename(base_path)}.{ext_hint}")
     try:
@@ -369,7 +397,7 @@ def main():
         ),
     )
     ap.add_argument("url", nargs="?", help="视频链接或 BV 号")
-    ap.add_argument("-o", "--output", help="完整输出路径 (会覆盖 -d -n)")
+    ap.add_argument("-o", "--output", help="完整输出路径 (最高优先级, 后缀自动)")
     ap.add_argument("-d", "--dir", default=".", help="输出目录 (默认: 当前目录)")
     ap.add_argument("-n", "--name", help="自定义名称 (替换模板中的 {title})")
     ap.add_argument(
@@ -467,9 +495,11 @@ def main():
         if pn and pages:
             print(f"\n[P{pn}] {pages[pn - 1].get('part', '')}")
         base = resolve_path(args, info, pn)
-        if want_v:
+        if want_v and want_a:
+            dl_media(url, base, "va", t0, t1)
+        elif want_v:
             dl_media(url, base, "v", t0, t1)
-        if want_a:
+        elif want_a:
             dl_media(url, base, "a", t0, t1)
 
     print("\n下载完成")
