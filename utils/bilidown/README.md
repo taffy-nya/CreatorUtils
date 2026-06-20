@@ -83,15 +83,50 @@ python bilidown.py BV1EF3uzeETo --end 18:83
 # 保存到 ./download 目录
 python bilidown.py BV1EF3uzeETo -d ./download
 
-# 保存到当前目录并命名为 "自定义视频名_BV1EF3uzeETo.mp4"
+# 使用自定义名称 (替换模板中的 {title})
 python bilidown.py BV1EF3uzeETo -n "自定义视频名"
 
-# 保存为 "BV1EF3uzeETo_自定义视频名.mp4"
+# 自定义模板: 只保留 BV 号和标题
 python bilidown.py BV1EF3uzeETo -t "{bvid}_{title}"
 
-# 直接指定输出文件（将忽略文件夹或模板设定）
+# 自定义模板: 加入分P和时间 (默认模板即为该格式)
+python bilidown.py BV1EF3uzeETo -t "{title}_{bvid}_{p}_{start}-{end}" -p 1,2 -r 1:30-3:00
+
+# 直接指定输出文件 (覆盖模板)
 python bilidown.py BV1EF3uzeETo -o ./clip.mp4
 ```
+
+### 模板变量
+
+| 变量 | 说明 |
+| --- | --- |
+| `{title}` | 视频标题 (或 `-n` 指定的自定义名称) |
+| `{bvid}` | BV 号 |
+| `{start}` | 起始时间 (`--start` 或 `-r` 指定时渲染) |
+| `{end}` | 结束时间 (`--end` 或 `-r` 指定时渲染) |
+| `{p}` | 分P号, **仅下载多个分P时渲染** |
+| `{P}` | 分P号, **视频有多P时始终渲染** (含单P下载) |
+
+**分隔符处理:** 模板中 `_` 和 `-` 作为"软分隔符", 相邻变量为空时会自动移除, 不会残留无意义的分隔符。
+
+```bash
+# 示例: 默认模板在单P无截取时输出 Title_BV1xx (不会残留多余的 _ 或 -)
+python bilidown.py BV1xx
+
+# 带截取时输出 Title_BV1xx_1h23m45s-1h30m0s
+python bilidown.py BV1xx -r 01:23:45-01:30:00
+
+# 仅指定开始时间时输出 Title_BV1xx_1h23m45s (end 为空, 末尾 - 被自动移除)
+python bilidown.py BV1xx --start 01:23:45
+```
+
+`{p}` 与 `{P}` 的区别: 以 5P 视频为例:
+
+| 场景 | `{p}` | `{P}` |
+| --- | --- | --- |
+| 只下载 P3 | 不渲染 | 渲染为 `_3` |
+| 下载 P1, P2, P3 | 渲染为 `_1` / `_2` / `_3` | 渲染为 `_1` / `_2` / `_3` |
+| 单P视频 | 不渲染 | 不渲染 |
 
 ## 参数列表
 
@@ -101,7 +136,7 @@ python bilidown.py BV1EF3uzeETo -o ./clip.mp4
 | `-o`, `--output` | 完整输出路径（会覆盖 `-d` 和 `-n` 参数） |
 | `-d`, `--dir` | 输出目录，默认为当前目录 |
 | `-n`, `--name` | 自定义名称（替换模板中的 `{title}`） |
-| `-t`, `--template` | 文件名模板，默认为 `{title}_{bvid}` |
+| `-t`, `--template` | 文件名模板 (见下方模板变量), 默认 `{title}_{bvid}_{p}_{start}-{end}` |
 | `-m`, `--mode` | 下载模式，`v`=视频, `a`=音频, `c`=封面，可组合，默认为 `v` |
 | `-p`, `--parts` | 分P选择（如 `1` 或 `1,3,5-7`） |
 | `-r`, `--range` | 时间片段区间（如 `1:30-3:00`） |

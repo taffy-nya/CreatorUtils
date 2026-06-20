@@ -25,8 +25,13 @@ try:
 except ImportError:
     yt_dlp = None
 
+DEFAULT_TEMPLATE = "{title}_{bvid}_{p}_{start}-{end}"
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 COOKIES = os.path.join(SCRIPT_DIR, "bilibili_cookies.txt")
+
+TEMPLATE_DELIMITERS = "_-"
+
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -221,11 +226,34 @@ def _sanitize(s):
     return _UNSAFE.sub("_", s).strip()
 
 
-def resolve_path(args, info, part=None):
+def _fmt_time(sec):
+    """将秒数转为 HhMmSs 格式 (如 1h23m45s, 5m30s, 90s), 传入 None 返回 None"""
+    if sec is None:
+        return None
+    h = int(sec // 3600)
+    m = int(sec % 3600 // 60)
+    s = int(sec % 60)
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m:
+        parts.append(f"{m}m")
+    parts.append(f"{s}s")
+    return "".join(parts)
+
+
+def resolve_path(args, info, part=None, start_sec=None, end_sec=None,
+                 total_pages=1, multi_download=False):
     """
     生成输出文件基础路径 (不含扩展名)
     优先级: -o > -d + 模板 (-n / -t)
     yt-dlp 会自动追加正确的扩展名
+
+    模板变量:
+      {title} {bvid} {start} {end} {p} {P}
+      {p}  仅 multi_download=True 时渲染
+      {P}  仅 total_pages > 1 时渲染
+    分隔符: TEMPLATE_DELIMITERS 中的字符会作为"软分隔符"自动折叠/修剪
     """
     if args.output:
         return os.path.splitext(args.output)[0]
@@ -233,15 +261,31 @@ def resolve_path(args, info, part=None):
     title = args.name or info["title"]
     tpl = args.template
 
-    # 多分P下载时自动追加分P号
-    if part is not None and "{p}" not in tpl:
-        tpl += "_P{p}"
+    SENTINEL = "\x00"
 
-    name = tpl.replace("{title}", title).replace("{bvid}", info["bvid"])
-    if part is not None:
-        name = name.replace("{p}", str(part))
-    else:
-        name = re.sub(r"_?P?\{p\}", "", name)
+    values = {
+        "title": title,
+        "bvid":  info["bvid"],
+        "start": _fmt_time(start_sec),
+        "end":   _fmt_time(end_sec),
+        "p":     str(part) if multi_download and part is not None else None,
+        "P":     str(part) if total_pages > 1 and part is not None else None,
+    }
+
+    # 替换变量, 空值用 sentinel 标记
+    name = tpl
+    for key, val in values.items():
+        name = name.replace("{" + key + "}", str(val) if val is not None else SENTINEL)
+
+    # 移除 sentinel 及其相邻的模板分隔符
+    name = re.sub(f"[{re.escape(TEMPLATE_DELIMITERS)}]*{re.escape(SENTINEL)}[{re.escape(TEMPLATE_DELIMITERS)}]*",
+                  "", name)
+    # 折叠剩余的连续分隔符 (如模板本身写了 __)
+    name = re.sub(f"[{re.escape(TEMPLATE_DELIMITERS)}]{{2,}}",
+                  lambda m: m.group(0)[0], name)
+
+    if not name:
+        name = info["bvid"]
 
     return os.path.join(args.dir, _sanitize(name))
 
@@ -384,12 +428,19 @@ def main():
             "模板变量:\n"
             "  {title}  视频标题 (或 -n 指定的自定义名称)\n"
             "  {bvid}   BV 号\n"
-            "  {p}      分P号 (多分P时自动追加)\n"
+            "  {start}  起始时间, --start 指定时渲染\n"
+            "  {end}    结束时间, --end 指定时渲染\n"
+            "  {p}      分P号, 仅下载多个分P时渲染\n"
+            "  {P}      分P号, 视频有多P时始终渲染 (含单P下载)\n"
+            "\n"
+            "分隔符: 模板中 _ 和 - 作为\"软分隔符\"，\n"
+            "        相邻变量为空时会自动折叠/修剪\n"
+            "示例: {title}_{start}-{end} → 无时间时只输出 Title_BV1\n"
             "\n"
             "示例:\n"
-            "  %(prog)s BV1xx4y1x7xx\n"
-            "  %(prog)s https://bilibili.com/video/BV1xx -m va\n"
-            '  %(prog)s BV1xx -p 1,3-5 -t "{title}_{bvid}"\n'
+            "  %(prog)s BV1EF3uzeETo\n"
+            "  %(prog)s https://www.bilibili.com/video/BV1xx -m va\n"
+            '  %(prog)s BV1xx -p 1,3-5 -t "{title}_{bvid}_{p}"\n'
             "  %(prog)s BV1xx -r 1:00-3:00\n"
             "  %(prog)s BV1xx -d ./download -m vac\n"
             "  %(prog)s BV1xx -o ./clip\n"
@@ -401,8 +452,8 @@ def main():
     ap.add_argument("-d", "--dir", default=".", help="输出目录 (默认: 当前目录)")
     ap.add_argument("-n", "--name", help="自定义名称 (替换模板中的 {title})")
     ap.add_argument(
-        "-t", "--template", default="{title}_{bvid}",
-        help='文件名模板 (默认: "{title}_{bvid}")',
+        "-t", "--template", default=DEFAULT_TEMPLATE,
+        help=f'文件名模板 (默认: "{DEFAULT_TEMPLATE}")',
     )
     ap.add_argument(
         "-m", "--mode", default="v",
@@ -412,7 +463,7 @@ def main():
     ap.add_argument("-r", "--range", help="时间区间 (如 1:30-3:00 或 12:23-01:23:34)")
     ap.add_argument("--start", help="起始时间, 省略则从头开始 (如 1:30)")
     ap.add_argument("--end", help="结束时间, 省略则到末尾 (如 3:00)")
-    ap.add_argument("--login", action="store_true", help="仅扫码登录 (不下载)")
+    ap.add_argument("--login", action="store_true", help="扫码登录")
 
     args = ap.parse_args()
 
@@ -494,7 +545,9 @@ def main():
         url = f"{url_base}?p={pn}" if pn else url_base
         if pn and pages:
             print(f"\n[P{pn}] {pages[pn - 1].get('part', '')}")
-        base = resolve_path(args, info, pn)
+        base = resolve_path(args, info, pn, t0, t1,
+                            total_pages=total,
+                            multi_download=len(plist) > 1)
         if want_v and want_a:
             dl_media(url, base, "va", t0, t1)
         elif want_v:
