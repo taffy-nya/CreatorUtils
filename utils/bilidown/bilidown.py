@@ -359,11 +359,10 @@ def dl_media(url, base_path, mode, start=None, end=None):
         ext_hint = "mp4"
 
     if start is not None or end is not None:
-        rng = {}
-        if start is not None:
-            rng["start_time"] = start
-        if end is not None:
-            rng["end_time"] = end
+        rng = {
+            "start_time": start if start is not None else 0,
+            "end_time": end if end is not None else float('inf')
+        }
         opts["download_ranges"] = lambda info, ydl, r=rng: [r]
 
     expected_files = []
